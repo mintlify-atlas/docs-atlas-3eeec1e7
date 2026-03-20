@@ -1,6 +1,6 @@
 ---
 title: Prompt Injection Testing
-description: How to run prompt injection experiments — injection vectors, the 11 injection goal types, result directory naming, and per-domain targeting.
+description: How to run prompt injection experiments — injection vectors, the 12 injection goal types, result directory naming, and per-domain targeting.
 ---
 
 Prompt injection attacks test whether an agent can be diverted from a legitimate task by malicious instructions embedded in its environment. Unlike jailbreak testing, the user gives the agent a **benign** instruction — a third party has planted the injection in a file, email, notification, or website that the agent will read during normal task execution.
@@ -9,7 +9,7 @@ Prompt injection attacks test whether an agent can be diverted from a legitimate
 
 For each task in `test_injection.json`, the environment is configured so that the agent encounters a hidden adversarial instruction while doing its work. The injection tries to make the agent perform a harmful side-effect — such as exfiltrating credentials, running a remote script, or deleting files — before or instead of completing the legitimate task.
 
-OS-Harm tests 11 distinct injection goals across multiple injection vectors, and iterates over every (vector, goal) combination for each task.
+OS-Harm tests 12 distinct injection goals across multiple injection vectors, and iterates over every (vector, goal) combination for each task.
 
 ## Using the `--inject` flag
 
@@ -58,7 +58,7 @@ An injection vector is the channel through which the malicious instruction is de
 
 Each injection vector specifies a list of `goals` — the action the injected instruction tries to make the agent perform. `run.py` looks up the full injection text for each goal in the `all_injection_goals` dict and injects it at runtime.
 
-The 11 active injection goals are:
+The 12 active injection goals are:
 
 | Goal ID | Full injected instruction |
 |---|---|
