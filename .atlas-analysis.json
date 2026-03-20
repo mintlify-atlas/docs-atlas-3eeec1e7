@@ -1,0 +1,104 @@
+{
+  "projectType": "ai-ml",
+  "projectName": "OS-Harm",
+  "projectDescription": "A benchmark for measuring the safety of LLM-based computer use agents across three harm categories: deliberate user misuse, prompt injection attacks, and model misbehavior.",
+  "theme": "linden",
+  "primaryColor": "#b21e1e",
+  "lightColor": "#e59f82",
+  "darkColor": "#e0dbd9",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "installation", "quickstart"]
+          },
+          {
+            "group": "Benchmark",
+            "pages": [
+              "benchmark/overview",
+              "benchmark/task-categories",
+              "benchmark/evaluation-examples"
+            ]
+          },
+          {
+            "group": "Running Experiments",
+            "pages": [
+              "experiments/running-agents",
+              "experiments/observation-types",
+              "experiments/jailbreak-testing",
+              "experiments/prompt-injection"
+            ]
+          },
+          {
+            "group": "Automated Judge",
+            "pages": [
+              "judge/overview",
+              "judge/running-the-judge",
+              "judge/judge-types"
+            ]
+          },
+          {
+            "group": "Agents",
+            "pages": [
+              "agents/prompt-agent",
+              "agents/supported-models"
+            ]
+          },
+          {
+            "group": "Results & Analysis",
+            "pages": [
+              "results/interpreting-results",
+              "results/model-findings"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "CLI Reference",
+            "pages": [
+              "reference/run-py",
+              "reference/judge-batch",
+              "reference/show-result"
+            ]
+          },
+          {
+            "group": "Data Format",
+            "pages": [
+              "reference/task-config-format",
+              "reference/injection-config-format",
+              "reference/trajectory-format"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "150 safety-focused benchmark tasks across three harm categories",
+    "Automated LLM judge with 0.76-0.79 F1 agreement with human annotations",
+    "Support for frontier models: o4-mini, Claude 3.7 Sonnet, Gemini 2.5 Pro, GPT-4.1",
+    "Multiple observation types: screenshot, accessibility tree, set-of-marks",
+    "Dynamic prompt injection testing with 11 injection goal types",
+    "Jailbreak prompt variant support for misuse category",
+    "Built on OSWorld environment with VMware Workstation support",
+    "Execution trace recording with video, screenshots, and logs"
+  ],
+  "publicApiSurface": [
+    "run.py --path_to_vm --model --observation_type --test_all_meta_path",
+    "run.py --jailbreak (deliberate misuse testing)",
+    "run.py --inject (prompt injection testing)",
+    "judge/run_judge_batch.py --judge_type --judge_model --sys_prompt_version --traj_dir",
+    "judge/run_judge.py run_judging(traj_dir, observation_type, sys_prompt_version, judge_model, judge_type)",
+    "mm_agents/agent.py PromptAgent(model, max_tokens, top_p, temperature, action_space, observation_type)",
+    "show_result.py get_result(action_space, use_model, observation_type, result_dir)",
+    "evaluation_examples/test_misuse.json",
+    "evaluation_examples/test_injection.json",
+    "evaluation_examples/test_misbehavior.json"
+  ]
+}
