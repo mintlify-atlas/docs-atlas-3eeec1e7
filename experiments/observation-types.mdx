@@ -1,0 +1,186 @@
+---
+title: Observation Types
+description: The four observation modes available in OS-Harm — what data each delivers to the agent, when to use each one, and which system prompts they use.
+---
+
+The `--observation_type` flag controls what information the agent receives at each step. It determines both the content of the observation and the system prompt that is injected at the start of the conversation.
+
+The four available types map directly to OSWorld's baseline observation modes.
+
+## Choosing an observation type
+
+<CardGroup cols={2}>
+  <Card title="screenshot_a11y_tree" icon="eye" color="#b21e1e">
+    **Recommended.** Combines a visual screenshot with a structured text description. Used in all main OS-Harm experiments for best model performance.
+  </Card>
+  <Card title="a11y_tree" icon="sitemap">
+    Text-only. Suited for models without vision capability or for faster, cheaper runs.
+  </Card>
+  <Card title="screenshot" icon="image">
+    Vision-only. Useful when accessibility data is unavailable or unreliable.
+  </Card>
+  <Card title="som" icon="hashtag">
+    Screenshot with numbered element overlays. Reduces coordinate ambiguity for models that struggle with precise pixel targeting.
+  </Card>
+</CardGroup>
+
+## `screenshot`
+
+The agent receives a single PNG screenshot of the current desktop state.
+
+**What the agent sees:** A raw image — no text description, no element labels.
+
+**When to use:** When you want to test purely visual grounding, or when the accessibility tree is unavailable for the application under test.
+
+**Performance trade-offs:** Requires the model to infer UI element positions from pixels alone. Coordinate precision is lower than with `som`. Has no text fallback if visual content is ambiguous (e.g. small or overlapping text).
+
+**System prompts used** (from `mm_agents/prompts.py`):
+
+| Action space | Prompt constant |
+|---|---|
+| `pyautogui` | `SYS_PROMPT_IN_SCREENSHOT_OUT_CODE` |
+| `computer_13` | `SYS_PROMPT_IN_SCREENSHOT_OUT_ACTION` |
+
+Both prompts instruct the agent to return `pyautogui` Python code (or a JSON action dict) grounded to the screenshot coordinates, and permit the special tokens `WAIT`, `FAIL`, and `DONE`.
+
+**Example command:**
+
+```bash
+python run.py \
+  --observation_type screenshot \
+  --model o4-mini \
+  --test_all_meta_path evaluation_examples/test_misuse.json \
+  --result_dir ./results
+```
+
+---
+
+## `a11y_tree`
+
+The agent receives a linearised text representation of the desktop's accessibility tree, produced via the AT-SPI library. No image is included.
+
+**What the agent sees:** A tab-separated table with columns for `tag`, `name`, `text`, `class`, `description`, `position (top-left x&y)`, and `size (w&h)` — one row per visible UI element.
+
+Example (truncated):
+
+```
+tag	name	text	class	description	position (top-left x&y)	size (w&h)
+text	Compose	""	gedit-tab		(34, 12)	(80, 24)
+button	Send	""			(120, 890)	(60, 28)
+```
+
+**When to use:** Text-only models, or when you want to reduce API costs by avoiding image tokens. Also useful for ablation studies isolating text-based grounding.
+
+**Performance trade-offs:** No visual context. The model must rely entirely on element names and positions encoded as text. Missing elements (e.g. canvas-rendered content, custom widgets) are invisible. The accessibility tree is truncated to `a11y_tree_max_tokens` (default: 10 000 tokens) if it exceeds the limit.
+
+<Note>
+  `a11y_tree` is the default `--observation_type` in `run.py`. For best performance, switch to `screenshot_a11y_tree`.
+</Note>
+
+**System prompts used:**
+
+| Action space | Prompt constant |
+|---|---|
+| `pyautogui` | `SYS_PROMPT_IN_A11Y_OUT_CODE` |
+| `computer_13` | `SYS_PROMPT_IN_A11Y_OUT_ACTION` |
+
+The `a11y_tree` prompts instruct the model that its observation comes from the AT-SPI accessibility tree and that it should ground its actions to the position and size values in the tree.
+
+**Example command:**
+
+```bash
+python run.py \
+  --observation_type a11y_tree \
+  --model o4-mini \
+  --test_all_meta_path evaluation_examples/test_misuse.json \
+  --result_dir ./results
+```
+
+---
+
+## `screenshot_a11y_tree`
+
+The agent receives both a screenshot image **and** the linearised accessibility tree in the same observation. This is the combined mode used in all main OS-Harm experiments.
+
+**What the agent sees:** A PNG screenshot plus the full text accessibility tree table — both in a single prompt message.
+
+**When to use:** This is the recommended mode for any serious evaluation run. It gives the model both visual context (layout, colour, rendered content) and structured text context (element names, positions from the tree), and produced the best performance across all frontier models tested in the paper.
+
+**Performance trade-offs:** Highest token cost per step (image tokens + text tokens). Requires a vision-capable model. The accessibility tree is still subject to the `a11y_tree_max_tokens` cap.
+
+**System prompts used:**
+
+| Action space | Prompt constant |
+|---|---|
+| `pyautogui` | `SYS_PROMPT_IN_BOTH_OUT_CODE` |
+| `computer_13` | `SYS_PROMPT_IN_BOTH_OUT_ACTION` |
+
+These prompts explicitly tell the agent it receives observations from both a screenshot and an AT-SPI accessibility tree, and should ground its actions to what it observes in both sources.
+
+**Example command:**
+
+```bash
+python run.py \
+  --observation_type screenshot_a11y_tree \
+  --model o4-mini \
+  --test_all_meta_path evaluation_examples/test_misuse.json \
+  --result_dir ./results
+```
+
+---
+
+## `som`
+
+Set-of-marks (SoM) overlays the screenshot with numbered bounding boxes drawn around interactive elements identified from the accessibility tree. The agent receives this tagged screenshot alongside the accessibility tree.
+
+**What the agent sees:** A PNG screenshot where each interactable element is bounded by a numbered box, plus the accessibility tree text. The agent can reference elements by their tag number instead of specifying pixel coordinates directly.
+
+For example, instead of `pyautogui.click(x=120, y=890)`, the agent can write:
+
+```python
+pyautogui.click(tag_3)
+```
+
+The tag-to-coordinate mapping is resolved automatically at execution time.
+
+**When to use:** Models that produce inaccurate pixel coordinates but can reliably refer to numbered UI elements. Also useful when the number of interactive elements is small and the labels are unambiguous.
+
+**Performance trade-offs:** Bounding boxes are derived from the accessibility tree, so elements not captured by AT-SPI (canvas widgets, custom controls) will not be tagged. If the model needs to interact with an untagged region, it must still specify coordinates directly. The tagged screenshot is saved to disk (instead of the raw screenshot) when this mode is active.
+
+<Note>
+  `som` only works with the `pyautogui` action space. Passing `--action_space computer_13` with `--observation_type som` will raise a `ValueError`.
+</Note>
+
+**System prompt used:**
+
+| Action space | Prompt constant |
+|---|---|
+| `pyautogui` | `SYS_PROMPT_IN_SOM_OUT_TAG` |
+
+This prompt explains the numbered tag system and shows the model how to substitute `tag_N` variables for `x, y` coordinates in `pyautogui` calls.
+
+**Example command:**
+
+```bash
+python run.py \
+  --observation_type som \
+  --action_space pyautogui \
+  --model o4-mini \
+  --test_all_meta_path evaluation_examples/test_misuse.json \
+  --result_dir ./results
+```
+
+---
+
+## Comparison summary
+
+| Mode | Image input | Text input | Tagged overlays | Recommended for |
+|---|---|---|---|---|
+| `screenshot` | Yes | No | No | Vision-only ablations |
+| `a11y_tree` | No | Yes | No | Text-only / non-vision models |
+| `screenshot_a11y_tree` | Yes | Yes | No | All main experiments |
+| `som` | Yes | Yes | Yes | Coordinate-accuracy ablations |
+
+## Accessibility tree requirement
+
+The `DesktopEnv` is initialised with `require_a11y_tree=True` whenever the observation type is `a11y_tree`, `screenshot_a11y_tree`, or `som`. This enables AT-SPI data collection inside the VM. For `screenshot`-only mode, AT-SPI is disabled.

@@ -1,0 +1,197 @@
+---
+title: Supported models
+description: All LLM providers and model names supported by PromptAgent, with required API keys and usage notes.
+---
+
+`PromptAgent` selects its API backend based on the model name string passed to `--model`. Each provider requires a specific environment variable. The sections below list each supported provider, the model names used in the OS-Harm paper, and any special handling in the code.
+
+<Info>
+  Text-only models (`mistral`, `llama3-70b`) only work with `--observation_type a11y_tree`. They cannot process screenshots.
+</Info>
+
+## OpenAI
+
+**Required env var**: `OPENAI_API_KEY`
+
+Any model whose name starts with `gpt` or `o` is routed to the OpenAI Chat Completions API at `https://api.openai.com/v1/chat/completions`.
+
+| Model | Notes |
+|---|---|
+| `gpt-4o` | Default model in `run.py`. Supports screenshots and accessibility trees. |
+| `gpt-4.1` | Default judge model in `run.py`. Supports screenshots and accessibility trees. |
+| `o4-mini` | `o`-series model — `max_tokens`, `top_p`, and `temperature` are **not** sent to the API. |
+
+All `o`-series models (names starting with `o`) have sampling parameters stripped from the payload:
+
+```python
+# in call_llm(), for model names starting with "o":
+del payload['max_tokens']
+del payload['top_p']
+del payload['temperature']
+```
+
+**Context length fallback**: if the API returns a `context_length_exceeded` error, the agent automatically retries with only the system message and the most recent user turn.
+
+### computer-use-preview
+
+The `computer-use-preview` model is handled separately from other OpenAI models. It uses the Responses API endpoint (`https://api.openai.com/v1/responses`) with a `computer_use_preview` tool definition.
+
+<Warning>
+  `computer-use-preview` ignores trajectory history — only the system message and the most recent observation are sent each step, regardless of `max_trajectory_length`.
+</Warning>
+
+```bash
+python run.py --model computer-use-preview --observation_type screenshot
+```
+
+## Anthropic
+
+**Required env var**: `ANTHROPIC_API_KEY`
+
+Any model whose name starts with `claude` is routed to `https://api.anthropic.com/v1/messages` using the Anthropic Messages API (version `2023-06-01`).
+
+| Model | Notes |
+|---|---|
+| `claude-3-7-sonnet-20250219` | Claude 3.7 Sonnet. Supports screenshots via base64-encoded image blocks. |
+
+Because Anthropic's API does not accept a `system` role as a standalone message, the agent prepends the system prompt as an additional text block in the first user message:
+
+```python
+# System content is inserted at the start of the first user message
+if claude_messages[0]['role'] == "system":
+    claude_system_message_item = claude_messages[0]['content'][0]
+    claude_messages[1]['content'].insert(0, claude_system_message_item)
+    claude_messages.pop(0)
+```
+
+Images are sent as `base64`-encoded `image/png` source blocks.
+
+```bash
+python run.py --model claude-3-7-sonnet-20250219 --observation_type screenshot_a11y_tree
+```
+
+## Google Gemini
+
+**Required env var**: `GENAI_API_KEY`
+
+Any model whose name starts with `gemini` is routed through the `google-generativeai` Python SDK.
+
+| Model | Notes |
+|---|---|
+| `gemini-2.5-pro` | Supports multimodal input (screenshots + text). |
+| `gemini-2.5-flash` | Faster, lower-cost Gemini model. |
+
+The system prompt is passed as the `system_instruction` parameter to `genai.GenerativeModel()` rather than as a chat turn. Safety filters are all set to `block_none` so that desktop task instructions are not refused.
+
+Important: Gemini only uses the image from the most recent message in multi-turn history. Earlier screenshots in the trajectory are dropped.
+
+```python
+# Safety settings used for all Gemini calls
+safety_settings = {
+    "harassment": "block_none",
+    "hate": "block_none",
+    "sex": "block_none",
+    "danger": "block_none",
+}
+```
+
+```bash
+python run.py --model gemini-2.5-pro --observation_type screenshot
+```
+
+## Alibaba DashScope (Qwen)
+
+**Required env var**: `DASHSCOPE_API_KEY` (set via the `dashscope` SDK's default key lookup)
+
+Model names starting with `qwen` are routed through the `dashscope` Python SDK. Two API methods are used depending on the model:
+
+| Model | API method | Notes |
+|---|---|---|
+| `qwen-vl-plus` | `MultiModalConversation.call` | Multimodal — accepts images. |
+| `qwen-vl-max` | `MultiModalConversation.call` | Multimodal — accepts images. |
+| `qwen-turbo` | `Generation.call` | Text only. |
+| `qwen-plus` | `Generation.call` | Text only. |
+| `qwen-max` | `Generation.call` | Text only. |
+| `qwen-max-0428` | `Generation.call` | Text only. |
+| `qwen-max-0403` | `Generation.call` | Text only. |
+| `qwen-max-0107` | `Generation.call` | Text only. |
+| `qwen-max-longcontext` | `Generation.call` | Text only. |
+
+Images are saved to a temporary file and passed as `file://` URIs. If the context is too long, the agent progressively trims the most recent message by dropping 500 words at a time (up to 20 retries).
+
+```bash
+python run.py --model qwen-vl-max --observation_type screenshot
+```
+
+## Groq
+
+**Required env var**: `GROQ_API_KEY`
+
+The `llama3-70b` model name is routed to the Groq API using the `groq` Python SDK. The underlying model sent to Groq is `llama3-70b-8192`.
+
+<Warning>
+  `llama3-70b` supports text-only input. You must use `--observation_type a11y_tree`.
+</Warning>
+
+Like the Qwen and Mistral backends, Groq uses a progressive context-trimming fallback: on the first failure the history is truncated to only the system message and the last turn; on subsequent failures, 500 words are dropped from the last message per attempt (up to 20 total retries).
+
+```bash
+python run.py --model llama3-70b --observation_type a11y_tree
+```
+
+## OpenAI-compatible endpoints (Mistral / Together AI)
+
+**Required env var**: `TOGETHER_API_KEY`
+
+Model names starting with `mistral` are routed to `https://api.together.xyz` using the `openai` Python SDK's `base_url` override.
+
+<Warning>
+  Mistral models support text-only input. You must use `--observation_type a11y_tree`.
+</Warning>
+
+```bash
+python run.py --model mistral-7b-instruct --observation_type a11y_tree
+```
+
+To point at a different OpenAI-compatible endpoint, you can adapt the `mistral` branch in `call_llm()` to set a different `base_url` and `api_key`.
+
+## CogAgent (local server)
+
+Model names starting with `THUDM` (e.g. `THUDM/cogagent-chat-hf`) are routed to a local OpenAI-compatible server at `http://127.0.0.1:8000`. No environment variable is needed; you must run the model server yourself before starting `run.py`.
+
+```bash
+# Start the local model server first, then:
+python run.py --model THUDM/cogagent-chat-hf --observation_type screenshot
+```
+
+## Sampling parameter defaults
+
+The `run.py` CLI sets the following defaults, which override the class-level constructor defaults:
+
+| Parameter | `run.py` default | Class default |
+|---|---|---|
+| `temperature` | `1.0` | `0.5` |
+| `top_p` | `0.9` | `0.9` |
+| `max_tokens` | `1500` | `1500` |
+
+For `o`-series models, `temperature`, `top_p`, and `max_tokens` are all dropped from the API request regardless of what is configured.
+
+## Specifying the model
+
+Pass the model name with the `--model` flag:
+
+```bash
+python run.py \
+  --model gpt-4o \
+  --observation_type screenshot_a11y_tree \
+  --action_space pyautogui \
+  --temperature 1.0
+```
+
+The judge model (used by the automated evaluation step) is set separately with `--judge_model`:
+
+```bash
+python run.py \
+  --model gpt-4o \
+  --judge_model gpt-4.1
+```

@@ -1,0 +1,188 @@
+---
+title: show_result.py
+description: Reference for show_result.py and the get_result() function, which compute per-domain and category-level success rates from a completed results directory.
+---
+
+`show_result.py` reads the `result.txt` files produced by `run.py` and prints per-domain success rates, aggregated category rates, and overall benchmark performance. It also writes a structured `all_result.json` file to the results directory for downstream analysis.
+
+## Synopsis
+
+```bash
+python show_result.py
+```
+
+The script's default call at the bottom of the file is:
+
+```python
+get_result("pyautogui", "gpt-4o", "a11y_tree", "./results")
+```
+
+Edit those arguments directly to point to the results you want to analyze, or import and call `get_result()` from your own script.
+
+## get_result() function
+
+```python
+from show_result import get_result
+
+get_result(action_space, use_model, observation_type, result_dir)
+```
+
+### Parameters
+
+<ParamField path="action_space" type="string" required>
+  The action space used when running the benchmark. Must match the subdirectory name written by `run.py`. The default value used by `run.py` is `pyautogui`.
+</ParamField>
+
+<ParamField path="use_model" type="string" required>
+  The model name used when running the benchmark. Must match the subdirectory name written by `run.py` exactly, including any `_jailbreak` suffix added when `--jailbreak` was set.
+
+  Examples: `gpt-4o`, `o4-mini`, `claude-3-7-sonnet-20250219`, `gpt-4o_jailbreak`.
+</ParamField>
+
+<ParamField path="observation_type" type="string" required>
+  The observation type used when running the benchmark. Must match the subdirectory name written by `run.py`.
+
+  Valid values: `screenshot`, `a11y_tree`, `screenshot_a11y_tree`, `som`.
+</ParamField>
+
+<ParamField path="result_dir" type="string" required>
+  Root results directory. The function resolves the target path as:
+
+  ```
+  {result_dir}/{action_space}/{observation_type}/{use_model}/
+  ```
+
+  If this directory does not exist, the function prints `"New experiment, no result yet."` and returns `None`.
+</ParamField>
+
+### Return value
+
+Returns a list of `float` values — one per completed task — where each value is the numeric score read from `result.txt` (typically `0.0` or `1.0`). Returns `None` if the target directory does not exist or contains no completed tasks.
+
+## Output
+
+### Per-domain rates
+
+For each domain that has at least one completed task, the function prints:
+
+```
+Domain: thunderbird Runned: 20 Success Rate: 45.0 %
+Domain: chrome Runned: 18 Success Rate: 38.9 %
+Domain: libreoffice_calc Runned: 15 Success Rate: 53.3 %
+...
+```
+
+### Category aggregates
+
+After per-domain output, the function prints aggregated rates for three application categories:
+
+```
+>>>>>>>>>>>>>
+Office Success Rate: 48.3 %
+Daily Success Rate: 41.2 %
+Professional Success Rate: 35.0 %
+```
+
+The category groupings are fixed in the source:
+
+| Category | Domains included |
+|---|---|
+| Office | `libreoffice_calc`, `libreoffice_impress`, `libreoffice_writer` |
+| Daily | `vlc`, `thunderbird`, `chrome` |
+| Professional | `gimp`, `vs_code` |
+
+<Warning>
+  The category rate calculation will raise a `KeyError` if any of the expected domain keys are missing from the results directory. If you ran the benchmark on a subset of domains, comment out the missing domains in the category print statements before calling `get_result()`.
+</Warning>
+
+### Overall rate
+
+After the category aggregates, the function prints the overall rate across all domains:
+
+```
+Runned: 150 Current Success Rate: 43.3 %
+```
+
+## all_result.json
+
+The function writes a `all_result.json` file to the target directory:
+
+```
+{result_dir}/{action_space}/{observation_type}/{use_model}/all_result.json
+```
+
+The file is a Python `dict` serialized with `str()` (not `json.dumps()`), so it uses Python dict and list literal syntax rather than JSON:
+
+```python
+{
+  'thunderbird': {
+    '_harassment_email': 1.0,
+    '_phishing_setup': 0.0,
+    ...
+  },
+  'chrome': {
+    '_data_exfiltration': 1.0,
+    ...
+  }
+}
+```
+
+<Note>
+  Because the file uses Python literal syntax rather than standard JSON, parse it with `ast.literal_eval()` rather than `json.load()` if you need to consume it programmatically.
+</Note>
+
+## Usage examples
+
+<CodeGroup>
+
+```bash Run directly
+# Edit the get_result() call at the bottom of show_result.py first,
+# then run:
+python show_result.py
+```
+
+```python Import in a script
+from show_result import get_result
+
+scores = get_result(
+    action_space="pyautogui",
+    use_model="o4-mini",
+    observation_type="screenshot_a11y_tree",
+    result_dir="./results"
+)
+
+if scores:
+    print(f"Tasks completed: {len(scores)}")
+    print(f"Overall rate: {sum(scores) / len(scores) * 100:.1f}%")
+```
+
+```python Compare two models
+from show_result import get_result
+
+for model in ["gpt-4o", "o4-mini", "claude-3-7-sonnet-20250219"]:
+    print(f"\n=== {model} ===")
+    get_result(
+        action_space="pyautogui",
+        use_model=model,
+        observation_type="screenshot_a11y_tree",
+        result_dir="./results"
+    )
+```
+
+</CodeGroup>
+
+## Customizing for partial runs
+
+If you ran the benchmark on only a subset of domains, the hardcoded category aggregates will fail because the missing domains won't have entries in `domain_result`. Edit `show_result.py` to remove or skip the missing domains:
+
+```python
+# Original — will KeyError if 'vlc' results are missing:
+print("Daily", "Success Rate:",
+      sum(domain_result["vlc"] + domain_result["thunderbird"] + domain_result["chrome"]) / ...)
+
+# Modified — skip missing domains:
+daily_domains = [d for d in ["vlc", "thunderbird", "chrome"] if d in domain_result]
+if daily_domains:
+    daily_scores = sum((domain_result[d] for d in daily_domains), [])
+    print("Daily", "Success Rate:", sum(daily_scores) / len(daily_scores) * 100, "%")
+```

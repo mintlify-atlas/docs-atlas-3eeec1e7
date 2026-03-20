@@ -1,0 +1,197 @@
+---
+title: PromptAgent
+description: The baseline multimodal agent used in OS-Harm to drive LLMs through desktop computer tasks.
+---
+
+`PromptAgent` is the core agent class in OS-Harm, adapted from the OSWorld baseline. It wraps any supported LLM and drives it through desktop computer tasks by converting observations into messages, calling the model, and parsing the response back into executable actions.
+
+## Constructor
+
+```python
+from mm_agents.agent import PromptAgent
+
+agent = PromptAgent(
+    model="gpt-4o",
+    max_tokens=1500,
+    top_p=0.9,
+    temperature=1.0,
+    action_space="pyautogui",
+    observation_type="screenshot_a11y_tree",
+    max_trajectory_length=3,
+)
+```
+
+### Parameters
+
+<ParamField path="model" type="string" required>
+  The LLM to use. Controls which API client is invoked and which system prompts are compatible. See [Supported models](/agents/supported-models) for the full list. Defaults to `"gpt-4-vision-preview"` in the class definition; the `run.py` CLI defaults to `"gpt-4o"`.
+</ParamField>
+
+<ParamField path="max_tokens" type="number" default="1500">
+  Maximum number of tokens in the model's response. Passed directly to the API. Note: for `o`-series OpenAI models (e.g. `o4-mini`), this parameter is dropped entirely — those models manage output length internally.
+</ParamField>
+
+<ParamField path="top_p" type="number" default="0.9">
+  Nucleus sampling probability. Values between 0 and 1. Dropped for `o`-series OpenAI models.
+</ParamField>
+
+<ParamField path="temperature" type="number" default="0.5">
+  Sampling temperature. The `run.py` CLI overrides this to `1.0`. Dropped for `o`-series OpenAI models.
+</ParamField>
+
+<ParamField path="action_space" type="string" default="computer_13">
+  Controls how actions are formatted in the system prompt and how responses are parsed. Two values are supported:
+
+  - **`pyautogui`** — the agent outputs Python code using the `pyautogui` library. Recommended for all experiments; this is the default in `run.py`.
+  - **`computer_13`** — the agent outputs structured JSON from a fixed 13-action vocabulary. Not compatible with `som` observation type.
+</ParamField>
+
+<ParamField path="observation_type" type="string" default="screenshot_a11y_tree">
+  Determines what the environment sends to the agent each step and which system prompt is selected. Four values are supported:
+
+  - **`screenshot`** — a PNG screenshot only.
+  - **`a11y_tree`** — a linearized accessibility tree (text only, no image).
+  - **`screenshot_a11y_tree`** — both screenshot and accessibility tree.
+  - **`som`** — a tagged screenshot with numbered bounding boxes drawn over interactive elements, plus the accessibility tree. Requires `action_space="pyautogui"`.
+
+  The `run.py` CLI defaults to `"a11y_tree"`.
+</ParamField>
+
+<ParamField path="max_trajectory_length" type="number" default="3">
+  The maximum number of previous (observation, thought, action) turns included in the context sent to the LLM. When the trajectory exceeds this length, only the most recent `max_trajectory_length` turns are kept. Set to `0` to send only the current step with no history.
+</ParamField>
+
+<ParamField path="a11y_tree_max_tokens" type="number" default="10000">
+  Maximum tokens allowed for the linearized accessibility tree text. Accessibility trees are tokenized with `tiktoken` (using the `gpt-4` encoding) and truncated to this limit before being included in the prompt. A `[...]` marker is appended when truncation occurs.
+</ParamField>
+
+<ParamField path="platform" type="string" default="ubuntu">
+  The target OS platform. Affects how the accessibility tree is linearized (namespace resolution). Supported values: `"ubuntu"`, `"windows"`.
+</ParamField>
+
+## System prompts
+
+The constructor selects a system prompt constant from `mm_agents/prompts.py` based on the combination of `observation_type` and `action_space`:
+
+| `observation_type`      | `action_space`   | Prompt constant                      |
+|-------------------------|------------------|--------------------------------------|
+| `screenshot`            | `pyautogui`      | `SYS_PROMPT_IN_SCREENSHOT_OUT_CODE`  |
+| `screenshot`            | `computer_13`    | `SYS_PROMPT_IN_SCREENSHOT_OUT_ACTION`|
+| `a11y_tree`             | `pyautogui`      | `SYS_PROMPT_IN_A11Y_OUT_CODE`        |
+| `a11y_tree`             | `computer_13`    | `SYS_PROMPT_IN_A11Y_OUT_ACTION`      |
+| `screenshot_a11y_tree`  | `pyautogui`      | `SYS_PROMPT_IN_BOTH_OUT_CODE`        |
+| `screenshot_a11y_tree`  | `computer_13`    | `SYS_PROMPT_IN_BOTH_OUT_ACTION`      |
+| `som`                   | `pyautogui`      | `SYS_PROMPT_IN_SOM_OUT_TAG`          |
+| `som`                   | `computer_13`    | _(raises `ValueError`)_              |
+
+All `OUT_CODE` prompts instruct the model to return `pyautogui` Python code inside a fenced code block, and allow three special responses: `WAIT`, `DONE`, and `FAIL`. The `OUT_ACTION` prompts instruct the model to return a JSON object from the 13-action vocabulary. The `SOM` prompt allows the model to refer to tagged elements by `tag_N` variables (e.g. `pyautogui.click(tag_2)`).
+
+At predict time, the task instruction is appended to the system message:
+
+```python
+system_message = self.system_message + "\nYou are asked to complete the following task: {}".format(instruction)
+```
+
+## The `predict()` method
+
+```python
+response, actions = agent.predict(instruction, obs)
+```
+
+`predict()` takes the task instruction and the current observation dict, builds a full message list for the LLM, calls the model, and parses the response into a list of actions.
+
+### Observation dict format
+
+The `obs` dict must contain at minimum:
+
+```python
+obs = {
+    "screenshot": bytes,        # raw PNG bytes (required for screenshot/screenshot_a11y_tree/som)
+    "accessibility_tree": str,  # raw XML string (required for a11y_tree/screenshot_a11y_tree/som)
+}
+```
+
+### Message construction
+
+<Steps>
+  <Step title="System message">
+    The system prompt plus the task instruction is placed as a `role: system` message.
+
+    For `computer-use-preview`, the content type is `input_text`; for all other models, it is `text`.
+  </Step>
+  <Step title="Trajectory history">
+    The last `max_trajectory_length` turns from `self.observations`, `self.actions`, and `self.thoughts` are appended as alternating `user` / `assistant` messages. If the trajectory is shorter than `max_trajectory_length`, all turns are included.
+
+    For `a11y_tree` observation type, messages contain only text. For `screenshot`, `screenshot_a11y_tree`, and `som`, messages include both text and a base64-encoded `image_url` (or `input_image` for `computer-use-preview`).
+  </Step>
+  <Step title="Current observation">
+    The current observation is appended as a `user` message using the same format as the history messages. Accessibility trees are linearized from raw XML into a tab-separated table and then trimmed to `a11y_tree_max_tokens` using `tiktoken`.
+
+    For `som`, bounding boxes are drawn on the screenshot first using `draw_bounding_boxes()`, and the resulting `masks` list is passed to the action parser.
+  </Step>
+</Steps>
+
+### LLM call and retry behavior
+
+The agent calls `self.call_llm()` with the constructed payload. This method is decorated with `@backoff.on_exception` using constant backoff:
+
+- **Interval**: 30 seconds between retries
+- **Max tries**: 10
+- **Retried exceptions**: `SSLError`, `openai.RateLimitError`, `openai.BadRequestError`, `openai.InternalServerError`, Google `InvalidArgument`, `ResourceExhausted`, `InternalServerError`, `BadRequest`
+
+<Warning>
+  Generic `Exception` is intentionally not included in the retry set. Unhandled exceptions propagate immediately to the outer evaluation loop so that the per-example time limit is respected.
+</Warning>
+
+For OpenAI models, if the API returns a `context_length_exceeded` error, the agent automatically retries with a shortened context: only the system message and the most recent user message are kept.
+
+### Action parsing
+
+After the LLM responds, `parse_actions()` converts the raw text to a list of actions:
+
+- **`pyautogui` action space**: calls `parse_code_from_string()`, which extracts fenced Python code blocks. For `som`, calls `parse_code_from_som_string()` instead, which prepends `tag_N = (x, y)` variable assignments resolved from the bounding box mask coordinates.
+- **`computer_13` action space**: calls `parse_actions_from_string()`, which extracts JSON from fenced blocks and parses it as a dict.
+- **Special tokens** (`WAIT`, `DONE`, `FAIL`): detected both inside and outside code blocks and returned as plain strings.
+
+### Return value
+
+```python
+response, actions = agent.predict(instruction, obs)
+# response: str — raw LLM output (or list of output blocks for computer-use-preview)
+# actions: list — parsed actions, or None if parsing failed
+```
+
+The observation, parsed actions, and raw response (used as the thought) are appended to `self.observations`, `self.actions`, and `self.thoughts` respectively.
+
+## Resetting the agent
+
+Call `agent.reset()` between evaluation examples to clear the trajectory history:
+
+```python
+agent.reset()           # clears self.thoughts, self.actions, self.observations
+agent.reset(logger)     # also replaces the module-level logger
+```
+
+## Usage example
+
+```python
+from mm_agents.agent import PromptAgent
+
+agent = PromptAgent(
+    model="gpt-4o",
+    observation_type="screenshot_a11y_tree",
+    action_space="pyautogui",
+    max_trajectory_length=3,
+)
+agent.reset()
+
+instruction = "Open the terminal and list the files in the home directory."
+obs = {
+    "screenshot": open("screenshot.png", "rb").read(),
+    "accessibility_tree": open("a11y.xml").read(),
+}
+
+response, actions = agent.predict(instruction, obs)
+print(actions)
+# e.g. ["import pyautogui\npyautogui.hotkey('ctrl', 'alt', 't')"]
+```
